@@ -1,12 +1,15 @@
 import rospy
 from nav_msgs.msg import Odometry
 from geometry_msgs.msg import PointStamped, Twist
+from std_msgs.msg import String, Empty
 import math
 from RobotClass import Robot
 import time
 from tf2_msgs.msg import TFMessage
 
 robot = Robot()
+emergency_stop = False
+collision_stop = False
 
 prev_linear = 0
 prev_angular = 0
@@ -63,13 +66,12 @@ def euler_from_quaternion(x, y, z, w):
 
 
 
-
-
-
 def pointcb(point_msg):
+    global emergency_stop
     print("Received goal point")
 
     def turn_to_goal(goal_x, goal_y):
+        global emergency_stop
         print("Turning to goal point")
         odo_msg = rospy.wait_for_message('/odometry/filtered', Odometry)
         euler_x, euler_y, euler_z = euler_from_quaternion(odo_msg.pose.pose.orientation.x, odo_msg.pose.pose.orientation.y, odo_msg.pose.pose.orientation.z, odo_msg.pose.pose.orientation.w)
@@ -85,7 +87,7 @@ def pointcb(point_msg):
         goal_angle = math.degrees(math.atan2(change_in_y, change_in_x))
         print(f"Goal angle: {goal_angle}, changed needed: {goal_angle - euler_z}")
 
-        while round(goal_angle - euler_z, 0) != 0:
+        while (round(goal_angle - euler_z, 0) != 0) and (not emergency_stop):
             odo_msg = rospy.wait_for_message('/odometry/filtered', Odometry)
             euler_x, euler_y, euler_z = euler_from_quaternion(odo_msg.pose.pose.orientation.x, odo_msg.pose.pose.orientation.y, odo_msg.pose.pose.orientation.z, odo_msg.pose.pose.orientation.w)
             print(f"Current angle: {euler_z}, goal angle: {goal_angle}, delta: {goal_angle - euler_z}")
@@ -95,12 +97,13 @@ def pointcb(point_msg):
             else:
                 # print(f"Left : {goal_angle - euler_z}")
                 robot.left(0.35)
-            time.sleep(0.1)
+            rospy.sleep(0.1)
             robot.stop()
         print(f"done, final deviation: {goal_angle - euler_z}")
 
 
     def move_to_goal(goal_x, goal_y):
+        global emergency_stop
         print("Moving to goal point")
         odo_msg = rospy.wait_for_message('/odometry/filtered', Odometry)
         change_in_x = goal_x - odo_msg.pose.pose.position.x
@@ -109,7 +112,7 @@ def pointcb(point_msg):
 
         prev_distance = 1000
         distance = math.sqrt(change_in_x**2 + change_in_y**2)
-        while distance > 0.1:
+        while (distance > 0.1) and (not emergency_stop):
             odo_msg = rospy.wait_for_message('/odometry/filtered', Odometry)
             change_in_x = goal_x - odo_msg.pose.pose.position.x
             change_in_y = goal_y - odo_msg.pose.pose.position.y
@@ -121,14 +124,17 @@ def pointcb(point_msg):
             prev_distance = distance
             print(f"Current distance: {distance}")
             robot.forward(0.3)
+            rospy.sleep(0.1)
         print(f"done, final deviation: {distance}")
         return True
 
     goal_x, goal_y = point_msg.point.x, point_msg.point.y
     turn_to_goal(point_msg.point.x, point_msg.point.y)
-    while not move_to_goal(goal_x, goal_y):
+    while (not move_to_goal(goal_x, goal_y)) and (not emergency_stop):
         turn_to_goal(point_msg.point.x, point_msg.point.y)
+        rospy.sleep(0.1)
     robot.stop()
+    emergency_stop = False
 
 
 def loco_cb(data):
@@ -141,16 +147,44 @@ def loco_cb(data):
         prev_angular = data.angular.z
         robot.left(data.angular.z)
 
+def emergency_cb():
+    global emergency_stop
+    emergency_stop = True
+    robot.stop()
+
+def collision_cb():
+    global collision_stop
+    global emergency_stop
+    collision_stop = True
+    emergency_stop = True
+    robot.stop()
+
 
 def listener():
     rospy.init_node('listener', anonymous=True, log_level=rospy.INFO)
-    rospy.loginfo("Listener node initialized, subscribing to loco...")
+    rospy.loginfo("Listener node initialized, subscribing to emergency & collision...")
+    rospy.Subscriber("emergency", Empty, emergency_cb)
+    rospy.Subscriber("collision_stop", Empty, emergency_cb)
+    rospy.loginfo("Subscribed, subscribing to loco...")
     rospy.Subscriber("loco", Twist, loco_cb)
     rospy.loginfo("Subscribed, subscribing to goto...")
     rospy.Subscriber('goto', PointStamped, pointcb)
-    rospy.loginfo("Subscribed, spinning...")
-    rospy.spin()
-    rospy.loginfo("Spunned")
+
+    rate = rospy.Rate(10) # 10hz
+    while not rospy.is_shutdown():
+        if emergency_stop:
+            rospy.loginfo("Emergency stop, stopping robot")
+            robot.stop()
+            emergency_stop = False
+
+        if collision_stop:
+            rospy.loginfo("Collision stop, reversing robot")
+            robot.backward()
+            rospy.sleep(0.5)
+            robot.stop()
+            collision_stop = False
+
+        rate.sleep()
 
 if __name__ == '__main__':
     try:
