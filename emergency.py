@@ -3,12 +3,9 @@ from sensor_msgs.msg import Image
 from std_msgs.msg import String, Empty
 import numpy as np
 
-
 def depth_cb(data):
     global distance, prev_calc
-    # # if time.time() - prev_calc < 0.5:
-    # #     return
-    # prev_calc = time.time()
+
     np_arr = np.fromstring(data.data, np.uint16)
     np_arr = np_arr.reshape(data.height, data.width)
     np_arr[:190,:] = 0
@@ -30,4 +27,3 @@ def depth_cb(data):
 rospy.init_node('collision_checker', anonymous=True)
 rospy.Subscriber("camera/depth/image_rect_raw", Image, depth_cb)
 rospy.spin()
-

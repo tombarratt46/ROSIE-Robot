@@ -102,7 +102,10 @@ def move_to_goal(goal_x : float, goal_y : float) -> bool:
         amount = distance * 3
         rospy.sleep(min(amount, 5))
         robot.stop()
-    print(f"done, final deviation: {distance}")
+    if emergency_stop:
+        print("Stopping due to emergency")
+    else:
+        print(f"done, final deviation: {distance}")
     return True
 
 def pointcb(point_msg : PointStamped) -> None:
