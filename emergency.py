@@ -17,7 +17,7 @@ def depth_cb(data):
     np_arr[0,0] = 2000
     distance = np_arr[np_arr!=0].min()
 
-    if distance < 500:
+    if distance < 350:
         print("Emergency stop - distance: ", distance)
         pub = rospy.Publisher('/collision_stop', Empty, queue_size=1)
         pub.publish(Empty())

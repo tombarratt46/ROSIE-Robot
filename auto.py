@@ -11,6 +11,7 @@ from typing import Tuple
 robot = Robot()
 emergency_stop = False
 collision_stop = False
+is_idle = True
 
 prev_linear = 0
 prev_angular = 0
@@ -40,7 +41,7 @@ def euler_from_quaternion(x : float, y : float, z : float, w : float) -> Tuple[f
 
 
 def turn_to_goal(goal_x : float, goal_y : float) -> None:
-    global emergency_stop, status
+    global emergency_stop, status, is_idle
     print("Turning to goal point")
     odo_msg = rospy.wait_for_message('/odometry/filtered', Odometry)
     euler_x, euler_y, euler_z = euler_from_quaternion(odo_msg.pose.pose.orientation.x, odo_msg.pose.pose.orientation.y, odo_msg.pose.pose.orientation.z, odo_msg.pose.pose.orientation.w)
@@ -55,6 +56,7 @@ def turn_to_goal(goal_x : float, goal_y : float) -> None:
     print(f"Goal angle: {goal_angle}, changed needed: {goal_angle - euler_z}")
     status = f"Rotation Remaining : {goal_angle - euler_z} degrees"
     while (abs(goal_angle - euler_z) >= 1) and (not emergency_stop):
+        is_idle = False
         odo_msg = rospy.wait_for_message('/odometry/filtered', Odometry)
         euler_x, euler_y, euler_z = euler_from_quaternion(odo_msg.pose.pose.orientation.x, odo_msg.pose.pose.orientation.y, odo_msg.pose.pose.orientation.z, odo_msg.pose.pose.orientation.w)
         print(f"Current angle: {euler_z}, goal angle: {goal_angle}, delta: {goal_angle - euler_z}")
@@ -69,13 +71,14 @@ def turn_to_goal(goal_x : float, goal_y : float) -> None:
         amount = abs(goal_angle - euler_z) / 20
         rospy.sleep(min(amount, 5))
         robot.stop()
+        print(emergency_stop)
     if emergency_stop:
         print("Stopping due to emergency")
     else:
         print(f"done, final deviation: {goal_angle - euler_z}")
 
 def move_to_goal(goal_x : float, goal_y : float) -> bool:
-    global emergency_stop, status
+    global emergency_stop, status, is_idle
     print("Moving to goal point")
     odo_msg = rospy.wait_for_message('/odometry/filtered', Odometry)
     change_in_x = goal_x - odo_msg.pose.pose.position.x
@@ -85,6 +88,7 @@ def move_to_goal(goal_x : float, goal_y : float) -> bool:
     prev_distance = 1000
     distance = math.sqrt(change_in_x**2 + change_in_y**2)
     while (distance > 0.1) and (not emergency_stop):
+        is_idle = False
         status = f"Distance Remaining : {distance} meters"
         odo_msg = rospy.wait_for_message('/odometry/filtered', Odometry)
         change_in_x = goal_x - odo_msg.pose.pose.position.x
@@ -109,7 +113,8 @@ def move_to_goal(goal_x : float, goal_y : float) -> bool:
     return True
 
 def pointcb(point_msg : PointStamped) -> None:
-    global emergency_stop, status
+    global emergency_stop, status, is_idle
+    is_idle = False
     print("Received goal point")
 
     goal_x, goal_y = point_msg.point.x, point_msg.point.y
@@ -121,14 +126,19 @@ def pointcb(point_msg : PointStamped) -> None:
     status = "Moving Complete"
     robot.stop()
     emergency_stop = False
+    is_idle = True
 
 
 def loco_cb(data : Twist) -> None:
-    global emergency_stop, collision_stop, status
-    print(f"Linear: {data.linear.x}, Angular: {data.angular.z}")
+    global emergency_stop, collision_stop, status, is_idle
+    is_idle = False
+    print(f"Linear: {data.linear.x}, Angular: {data.angular.z}, Emergency_stop: {emergency_stop}")
     global prev_linear, prev_angular
     if emergency_stop:
         print("Emergency stop active, not moving")
+        prev_linear = 0
+        prev_angular = 0
+        robot.stop()
         return
     if data.linear.x != prev_linear:
         if data.linear.x > 0:
@@ -147,11 +157,12 @@ def loco_cb(data : Twist) -> None:
         robot.left(data.angular.z)
 
 def emergency_cb(data : Empty) -> None:
-    global emergency_stop, status
+    global emergency_stop, status, is_idle
 
     status = f"E-Stop Received"
-    print("Emergency stop received, stopping robot")
-    emergency_stop = True
+    if not is_idle:
+        print("Emergency stop received, stopping robot")
+        emergency_stop = True
     #robot.stop()
 
 def collision_cb(data : Empty) -> None:
@@ -163,11 +174,14 @@ def collision_cb(data : Empty) -> None:
     #robot.stop()
 
 def scan_cb(data : Empty) -> None:
-    global emergency_stop, status
+    global emergency_stop, status, is_idle
+    is_idle = False
     rotation_count = 100
+    print("Scanning {rotation_count} times...")
 
     for i in range(rotation_count):
         status = f"Scanning {i+1}/{rotation_count}"
+        print(status)
         robot.left(0.4)
         rospy.sleep(0.2)
         if emergency_stop:
@@ -176,10 +190,12 @@ def scan_cb(data : Empty) -> None:
         rospy.sleep(0.4)
         if emergency_stop:
             break
+    print("Scan complete")
+    is_idle = True
 
 
 def listener() -> None:
-    global emergency_stop, collision_stop, status
+    global emergency_stop, collision_stop, status, is_idle
     rospy.Subscriber("emergency", Empty, emergency_cb)
     rospy.Subscriber("collision_stop", Empty, collision_cb)
     rospy.Subscriber("loco", Twist, loco_cb)
@@ -190,8 +206,14 @@ def listener() -> None:
     rate = rospy.Rate(10) # 10hz
     while not rospy.is_shutdown():
         if emergency_stop:
-            rospy.loginfo("Emergency stop, stopping robot")
-            robot.stop()
+            if is_idle:
+                rospy.loginfo("Emergency stop, robot already idle")
+                emergency_stop = False
+            else:
+                rospy.loginfo(f"Emergency stop, stopping robot")
+                robot.stop()
+                rospy.sleep(1)
+                is_idle = True
 
         if collision_stop:
             rospy.loginfo("Collision stop, reversing robot")
