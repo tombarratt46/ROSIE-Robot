@@ -164,7 +164,7 @@ def collision_cb(data : Empty) -> None:
 
 def scan_cb(data : Empty) -> None:
     global emergency_stop, status
-    rotation_count = 25
+    rotation_count = 100
 
     for i in range(rotation_count):
         status = f"Scanning {i+1}/{rotation_count}"
